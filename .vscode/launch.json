@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Executable (Linux)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/_bin/hello-debug",
+      "args": ["build"],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Compile"
+    }
+  ]
+}
