@@ -79,7 +79,7 @@ def needs_rebuild(src: Path, obj: Path) -> bool:
     return any(dep.exists() and dep.stat().st_mtime > obj_mtime for dep in deps)
 
 
-def compile_source(src: Path) -> Path:
+def compile_source(src: Path, extra_flags: Iterable[str] = ()) -> Path:
     obj = obj_path(src)
     obj.parent.mkdir(parents=True, exist_ok=True)
 
@@ -87,7 +87,7 @@ def compile_source(src: Path) -> Path:
         print(f"{prefix('skip', GREY)} {src.relative_to(ROOT)}")
         return obj
 
-    cmd = [CC, *CFLAGS, *INCLUDE_FLAGS, "-c", str(src), "-o", str(obj)]
+    cmd = [CC, *CFLAGS, *extra_flags, *INCLUDE_FLAGS, "-c", str(src), "-o", str(obj)]
     print(f"{prefix('cc', GREEN)} {src.relative_to(ROOT)}")
     run_command(cmd)
     return obj
@@ -122,16 +122,51 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv[1:])
 
 
-def parse_sections(src: Path) -> list[str]:
-    """Extract section names from // [ ... ] markers."""
+def parse_sections_and_defines(src: Path) -> tuple[list[str], list[str]]:
+    """Extract section names and compile-time defines from // [ ... ] markers."""
     text = src.read_text(encoding="utf-8", errors="ignore")
     matches = re.findall(r"//\s*\[(.*?)\]", text)
     sections: list[str] = []
+    defines: list[str] = []
     for raw in matches:
-        for section in raw.split():
-            if section not in sections:
-                sections.append(section)
-    return sections
+        for token in raw.split():
+            if token.startswith("*"):
+                define = token[1:]
+                if define and define not in defines:
+                    defines.append(define)
+                continue
+            if token not in sections:
+                sections.append(token)
+    return sections, defines
+
+
+def module_header_for_dir(directory: Path) -> Path | None:
+    """Return the single header in a module directory (non-recursive)."""
+    headers = sorted(directory.glob("*.h"))
+    if not headers:
+        return None
+    if len(headers) > 1:
+        names = ", ".join(h.name for h in headers)
+        raise SystemExit(colour(f"Multiple headers in module {directory}: {names}", RED))
+    return headers[0]
+
+
+def expand_sections(sections: list[str]) -> list[str]:
+    ordered = list(sections)
+    seen = set(sections)
+    pending = list(sections)
+    while pending:
+        section = pending.pop(0)
+        header = module_header_for_dir(SRC_DIR / section)
+        if not header:
+            continue
+        deps, _ = parse_sections_and_defines(header)
+        for dep in deps:
+            if dep not in seen:
+                seen.add(dep)
+                ordered.append(dep)
+                pending.append(dep)
+    return ordered
 
 
 def section_sources(section: str) -> list[Path]:
@@ -151,16 +186,17 @@ def unique(seq: Iterable[Path]) -> list[Path]:
     return ordered
 
 
-def sources_for_project(project: str) -> list[Path]:
+def sources_for_project(project: str) -> tuple[list[Path], list[str]]:
     root_src = SRC_DIR / f"{project}.c"
     if not root_src.exists():
         raise SystemExit(colour(f"Unknown project '{project}' (missing {root_src})", RED))
 
-    sections = parse_sections(root_src)
+    sections, defines = parse_sections_and_defines(root_src)
+    sections = expand_sections(sections)
     sources: list[Path] = [root_src]
     for section in sections:
         sources.extend(section_sources(section))
-    return unique(sources)
+    return unique(sources), defines
 
 
 def banner(profile: str, projects: list[str]) -> None:
@@ -195,14 +231,44 @@ def main(argv: list[str] | None = None) -> None:
     if not projects:
         raise SystemExit(colour("No projects found in src/", RED))
 
-    project_sources = {name: sources_for_project(name) for name in projects}
+    project_sources: dict[str, list[Path]] = {}
+    project_defines: dict[str, list[str]] = {}
+    for name in projects:
+        sources, defines = sources_for_project(name)
+        project_sources[name] = sources
+        project_defines[name] = defines
     all_sources = unique(src for sources in project_sources.values() for src in sources)
 
     banner(profile, projects)
     if not all_sources:
         raise SystemExit(colour("No C sources found in src/", RED))
 
-    compiled = {src: compile_source(src) for src in all_sources}
+    module_define_cache: dict[Path, list[str]] = {}
+    extra_flags_by_source: dict[Path, list[str]] = {}
+    for src in all_sources:
+        header = module_header_for_dir(src.parent)
+        if header:
+            if header not in module_define_cache:
+                _, defines = parse_sections_and_defines(header)
+                module_define_cache[header] = defines
+            defines = module_define_cache[header]
+        else:
+            defines = []
+        extra_flags_by_source[src] = [f"-D{define}" for define in defines]
+
+    for project in projects:
+        root_src = SRC_DIR / f"{project}.c"
+        defines = project_defines.get(project, [])
+        if defines:
+            extra_flags = extra_flags_by_source.get(root_src, [])
+            extra_flags_by_source[root_src] = [
+                *extra_flags,
+                *[f"-D{define}" for define in defines],
+            ]
+
+    compiled = {
+        src: compile_source(src, extra_flags_by_source.get(src, [])) for src in all_sources
+    }
 
     for project, sources in project_sources.items():
         objects = [compiled[src] for src in sources]
