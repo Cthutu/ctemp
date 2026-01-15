@@ -130,8 +130,22 @@ def parse_sections_and_defines(src: Path) -> tuple[list[str], list[str]]:
     defines: list[str] = []
     for raw in matches:
         for token in raw.split():
+            if token == "=":
+                raise SystemExit(
+                    colour(
+                        f"Invalid define in {src}: use *NAME=VALUE with no spaces around '='",
+                        RED,
+                    )
+                )
             if token.startswith("*"):
                 define = token[1:]
+                if not define or define.endswith("="):
+                    raise SystemExit(
+                        colour(
+                            f"Invalid define in {src}: use *NAME=VALUE with no spaces around '='",
+                            RED,
+                        )
+                    )
                 if define and define not in defines:
                     defines.append(define)
                 continue
@@ -151,16 +165,65 @@ def module_header_for_dir(directory: Path) -> Path | None:
     return headers[0]
 
 
+def parse_build_file(build_file: Path) -> tuple[list[str], list[str]]:
+    """Extract section names and defines from a .build file."""
+    sections: list[str] = []
+    defines: list[str] = []
+    text = build_file.read_text(encoding="utf-8", errors="ignore")
+    for line in text.splitlines():
+        for token in line.split():
+            if token == "=":
+                raise SystemExit(
+                    colour(
+                        f"Invalid define in {build_file}: use *NAME=VALUE with no spaces around '='",
+                        RED,
+                    )
+                )
+            if token.startswith("*"):
+                define = token[1:]
+                if not define or define.endswith("="):
+                    raise SystemExit(
+                        colour(
+                            f"Invalid define in {build_file}: use *NAME=VALUE with no spaces around '='",
+                            RED,
+                        )
+                    )
+                if define and define not in defines:
+                    defines.append(define)
+                continue
+            if token not in sections:
+                sections.append(token)
+    return sections, defines
+
+
+def module_config_for_dir(directory: Path) -> tuple[list[str], list[str]]:
+    """Combine module deps/defines from header comments and .build file."""
+    sections: list[str] = []
+    defines: list[str] = []
+    header = module_header_for_dir(directory)
+    if header:
+        h_sections, h_defines = parse_sections_and_defines(header)
+        sections.extend(h_sections)
+        defines.extend(h_defines)
+    build_file = directory / ".build"
+    if build_file.exists():
+        b_sections, b_defines = parse_build_file(build_file)
+        for section in b_sections:
+            if section not in sections:
+                sections.append(section)
+        for define in b_defines:
+            if define not in defines:
+                defines.append(define)
+    return sections, defines
+
+
 def expand_sections(sections: list[str]) -> list[str]:
     ordered = list(sections)
     seen = set(sections)
     pending = list(sections)
     while pending:
         section = pending.pop(0)
-        header = module_header_for_dir(SRC_DIR / section)
-        if not header:
-            continue
-        deps, _ = parse_sections_and_defines(header)
+        deps, _ = module_config_for_dir(SRC_DIR / section)
         for dep in deps:
             if dep not in seen:
                 seen.add(dep)
@@ -246,14 +309,11 @@ def main(argv: list[str] | None = None) -> None:
     module_define_cache: dict[Path, list[str]] = {}
     extra_flags_by_source: dict[Path, list[str]] = {}
     for src in all_sources:
-        header = module_header_for_dir(src.parent)
-        if header:
-            if header not in module_define_cache:
-                _, defines = parse_sections_and_defines(header)
-                module_define_cache[header] = defines
-            defines = module_define_cache[header]
-        else:
-            defines = []
+        module_dir = src.parent
+        if module_dir not in module_define_cache:
+            _, defines = module_config_for_dir(module_dir)
+            module_define_cache[module_dir] = defines
+        defines = module_define_cache[module_dir]
         extra_flags_by_source[src] = [f"-D{define}" for define in defines]
 
     for project in projects:
