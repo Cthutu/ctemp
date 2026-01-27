@@ -1,11 +1,13 @@
-#include <stdio.h>
+//> use: greet
+
+#include <greet/greet.h>
 
 int main(int argc, char** argv)
 {
     (void)argc;
     (void)argv;
 
-    printf("Hello, World!\n");
+    greet("World");
 
     return 0;
 }

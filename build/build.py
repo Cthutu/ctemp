@@ -75,6 +75,12 @@ def needs_rebuild(src: Path, obj: Path) -> bool:
         return True
 
     deps = [src, API_HEADER, *headers_for_source(src)]
+    root_build = SRC_DIR / ".build"
+    if root_build.exists():
+        deps.append(root_build)
+    module_build = src.parent / ".build"
+    if module_build.exists() and module_build != root_build:
+        deps.append(module_build)
     obj_mtime = obj.stat().st_mtime
     return any(dep.exists() and dep.stat().st_mtime > obj_mtime for dep in deps)
 
@@ -98,7 +104,9 @@ def link_executable(objects: list[Path], executable: Path) -> None:
 
     if executable.exists():
         exe_mtime = executable.stat().st_mtime
-        newest_obj = max(obj.stat().st_mtime for obj in objects) if objects else exe_mtime
+        newest_obj = (
+            max(obj.stat().st_mtime for obj in objects) if objects else exe_mtime
+        )
         if exe_mtime >= newest_obj:
             print(f"{prefix('skip', GREY)} {executable.relative_to(ROOT)} (up to date)")
             return
@@ -118,40 +126,119 @@ def select_cflags(profile: str) -> list[str]:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build nerd projects.")
     parser.add_argument("projects", nargs="*", help="Project names (omit to build all)")
-    parser.add_argument("-r", "--release", action="store_true", help="Build release profile")
+    parser.add_argument(
+        "-r", "--release", action="store_true", help="Build release profile"
+    )
     return parser.parse_args(argv[1:])
 
 
-def parse_sections_and_defines(src: Path) -> tuple[list[str], list[str]]:
-    """Extract section names and compile-time defines from // [ ... ] markers."""
-    text = src.read_text(encoding="utf-8", errors="ignore")
-    matches = re.findall(r"//\s*\[(.*?)\]", text)
+def _add_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def _parse_command_lines(
+    lines: Iterable[str],
+    source: Path,
+    *,
+    require_prefix: bool,
+) -> tuple[list[str], list[str]]:
+    known_commands = ("use", "def")
     sections: list[str] = []
     defines: list[str] = []
-    for raw in matches:
-        for token in raw.split():
-            if token == "=":
+    for line_no, line in enumerate(lines, start=1):
+        if require_prefix:
+            match = re.match(r"\s*//>\s*(\w+)\s*:\s*(.*)$", line)
+            if not match:
+                continue
+        else:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("//>"):
+                stripped = stripped[3:].lstrip()
+            match = re.match(r"(\w+)\s*:\s*(.*)$", stripped)
+            if not match:
                 raise SystemExit(
                     colour(
-                        f"Invalid define in {src}: use *NAME=VALUE with no spaces around '='",
+                        f"Invalid directive in {source}:{line_no}: expected 'command: params'",
                         RED,
                     )
                 )
-            if token.startswith("*"):
-                define = token[1:]
-                if not define or define.endswith("="):
+
+        command, params = match.groups()
+        command = command.lower()
+        tokens = params.split()
+
+        if command == "use":
+            for token in tokens:
+                if "=" in token:
                     raise SystemExit(
                         colour(
-                            f"Invalid define in {src}: use *NAME=VALUE with no spaces around '='",
+                            f"Invalid module name in {source}:{line_no}: '{token}'",
                             RED,
                         )
                     )
-                if define and define not in defines:
-                    defines.append(define)
-                continue
-            if token not in sections:
-                sections.append(token)
+                _add_unique(sections, token)
+        elif command == "def":
+            for token in tokens:
+                if token == "=" or token.startswith("=") or token.endswith("="):
+                    raise SystemExit(
+                        colour(
+                            f"Invalid define in {source}:{line_no}: use NAME or NAME=VALUE",
+                            RED,
+                        )
+                    )
+                _add_unique(defines, token)
+        else:
+            border_top = colour("┌──────┬───────────────────────┐", CYAN)
+            border_mid = colour("├──────┼───────────────────────┤", CYAN)
+            border_bot = colour("└──────┴───────────────────────┘", CYAN)
+            header = (
+                colour("│ ", CYAN)
+                + colour("NAME", BOLD + YELLOW)
+                + colour(" │ ", CYAN)
+                + colour("DESCRIPTION", BOLD + YELLOW)
+                + colour("           │", CYAN)
+            )
+            row_use = (
+                colour("│ ", CYAN)
+                + colour("use ", GREEN)
+                + colour(" │ ", CYAN)
+                + colour("module dependencies", CYAN)
+                + colour("   │", CYAN)
+            )
+            row_def = (
+                colour("│ ", CYAN)
+                + colour("def ", GREEN)
+                + colour(" │ ", CYAN)
+                + colour("preprocessor defines", CYAN)
+                + colour("  │", CYAN)
+            )
+            table_lines = [
+                colour("Known commands:", YELLOW),
+                border_top,
+                header,
+                border_mid,
+                row_use,
+                row_def,
+                border_bot,
+            ]
+            raise SystemExit(
+                colour(
+                    f"Unknown directive in {source}:{line_no}: '{command}'",
+                    RED,
+                )
+                + "\n"
+                + "\n".join(table_lines)
+            )
     return sections, defines
+
+
+def parse_sections_and_defines(src: Path) -> tuple[list[str], list[str]]:
+    """Extract section names and compile-time defines from //> command: params markers."""
+    text = src.read_text(encoding="utf-8", errors="ignore")
+    return _parse_command_lines(text.splitlines(), src, require_prefix=True)
 
 
 def module_header_for_dir(directory: Path) -> Path | None:
@@ -161,39 +248,16 @@ def module_header_for_dir(directory: Path) -> Path | None:
         return None
     if len(headers) > 1:
         names = ", ".join(h.name for h in headers)
-        raise SystemExit(colour(f"Multiple headers in module {directory}: {names}", RED))
+        raise SystemExit(
+            colour(f"Multiple headers in module {directory}: {names}", RED)
+        )
     return headers[0]
 
 
 def parse_build_file(build_file: Path) -> tuple[list[str], list[str]]:
     """Extract section names and defines from a .build file."""
-    sections: list[str] = []
-    defines: list[str] = []
     text = build_file.read_text(encoding="utf-8", errors="ignore")
-    for line in text.splitlines():
-        for token in line.split():
-            if token == "=":
-                raise SystemExit(
-                    colour(
-                        f"Invalid define in {build_file}: use *NAME=VALUE with no spaces around '='",
-                        RED,
-                    )
-                )
-            if token.startswith("*"):
-                define = token[1:]
-                if not define or define.endswith("="):
-                    raise SystemExit(
-                        colour(
-                            f"Invalid define in {build_file}: use *NAME=VALUE with no spaces around '='",
-                            RED,
-                        )
-                    )
-                if define and define not in defines:
-                    defines.append(define)
-                continue
-            if token not in sections:
-                sections.append(token)
-    return sections, defines
+    return _parse_command_lines(text.splitlines(), build_file, require_prefix=False)
 
 
 def module_config_for_dir(directory: Path) -> tuple[list[str], list[str]]:
@@ -252,7 +316,9 @@ def unique(seq: Iterable[Path]) -> list[Path]:
 def sources_for_project(project: str) -> tuple[list[Path], list[str]]:
     root_src = SRC_DIR / f"{project}.c"
     if not root_src.exists():
-        raise SystemExit(colour(f"Unknown project '{project}' (missing {root_src})", RED))
+        raise SystemExit(
+            colour(f"Unknown project '{project}' (missing {root_src})", RED)
+        )
 
     sections, defines = parse_sections_and_defines(root_src)
     sections = expand_sections(sections)
@@ -327,7 +393,8 @@ def main(argv: list[str] | None = None) -> None:
             ]
 
     compiled = {
-        src: compile_source(src, extra_flags_by_source.get(src, [])) for src in all_sources
+        src: compile_source(src, extra_flags_by_source.get(src, []))
+        for src in all_sources
     }
 
     for project, sources in project_sources.items():
