@@ -39,7 +39,7 @@ def colour(text: str, prefix: str) -> str:
 
 def prefix(label: str, color: str) -> str:
     """Return a uniform, styled status prefix like [ cc ]."""
-    return colour(f"[{label:^5}]", color + (BOLD if color != GREY else ""))
+    return colour(f"[{label:^4}]", color + (BOLD if color != GREY else ""))
 
 
 def run_command(cmd: list[str]) -> None:
