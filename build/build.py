@@ -90,11 +90,11 @@ def compile_source(src: Path, extra_flags: Iterable[str] = ()) -> Path:
     obj.parent.mkdir(parents=True, exist_ok=True)
 
     if not needs_rebuild(src, obj):
-        print(f"{prefix('skip', GREY)} {src.relative_to(ROOT)}")
+        print(f"{prefix('skip', GREY)} {src.relative_to(SRC_DIR)} (up to date)")
         return obj
 
     cmd = [CC, *CFLAGS, *extra_flags, *INCLUDE_FLAGS, "-c", str(src), "-o", str(obj)]
-    print(f"{prefix('cc', GREEN)} {src.relative_to(ROOT)}")
+    print(f"{prefix('cc', GREEN)} {src.relative_to(SRC_DIR)}")
     run_command(cmd)
     return obj
 
@@ -143,7 +143,6 @@ def _parse_command_lines(
     *,
     require_prefix: bool,
 ) -> tuple[list[str], list[str]]:
-    known_commands = ("use", "def")
     sections: list[str] = []
     defines: list[str] = []
     for line_no, line in enumerate(lines, start=1):
