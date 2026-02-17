@@ -1,13 +1,13 @@
-//> use: greet
+//> use: core
 
-#include <greet/greet.h>
+#include <core/core.h>
 
-int main(int argc, char** argv)
+int run(int argc, char** argv)
 {
-    (void)argc;
-    (void)argv;
+    UNUSED(argc);
+    UNUSED(argv);
 
-    greet("World");
+    prn(ANSI_RED "Hello" ANSI_RESET ", " ANSI_GREEN "World!" ANSI_RESET);
 
     return 0;
 }
