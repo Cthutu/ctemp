@@ -424,15 +424,19 @@ def main(argv: list[str] | None = None) -> None:
                 *[f"-D{define}" for define in defines],
             ]
 
-    compiled = {
-        src: compile_source(src, extra_flags_by_source.get(src, []))
-        for src in all_sources
-    }
+    compiled: dict[Path, Path] = {}
+    skipped_sources = 0
+    for src in all_sources:
+        obj, skipped = compile_source(src, extra_flags_by_source.get(src, []))
+        compiled[src] = obj
+        if skipped:
+            skipped_sources += 1
 
     for project, sources in project_sources.items():
         objects = [compiled[src] for src in sources]
         link_executable(objects, executable_path(project, profile))
 
+    print(f"{prefix('skip', GREY)} {skipped_sources} source file(s) up to date")
     finish_bar = colour("=" * 48, GREEN)
     print(finish_bar)
     print(colour(">> Build complete. Go be nerdy! \\o/ <<", BOLD + GREEN))
