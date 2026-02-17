@@ -15,7 +15,6 @@ SRC_DIR = ROOT / "src"
 BIN_DIR = ROOT / "_bin"
 OBJ_BASE = ROOT / "_obj"
 OBJ_DIR: Path = OBJ_BASE
-API_HEADER = ROOT / "src" / "core.h"
 
 # Compiler command sections
 CC = os.environ.get("CC", "clang")
@@ -60,9 +59,22 @@ def available_projects() -> list[str]:
     return sorted(p.stem for p in SRC_DIR.glob("*.c"))
 
 
+def module_root_for_path(path: Path) -> Path | None:
+    """Return the top-level module directory for a path under src/, if any."""
+    relative = path.relative_to(SRC_DIR)
+    if not relative.parts:
+        return None
+    candidate = SRC_DIR / relative.parts[0]
+    return candidate if candidate.is_dir() else None
+
+
 def headers_for_source(src: Path) -> list[Path]:
-    """Return headers in the source directory and all subdirectories."""
-    return sorted(src.parent.rglob("*.h"))
+    """Return all headers belonging to the source's top-level module tree."""
+    module_root = module_root_for_path(src)
+    if module_root is None:
+        # Top-level headers in src/ are intentionally ignored.
+        return []
+    return sorted(module_root.rglob("*.h"))
 
 
 def obj_path(src: Path) -> Path:
@@ -74,29 +86,36 @@ def needs_rebuild(src: Path, obj: Path) -> bool:
     if not obj.exists():
         return True
 
-    deps = [src, API_HEADER, *headers_for_source(src)]
+    deps = [src, *headers_for_source(src)]
     root_build = SRC_DIR / ".build"
     if root_build.exists():
         deps.append(root_build)
-    module_build = src.parent / ".build"
-    if module_build.exists() and module_build != root_build:
-        deps.append(module_build)
+    module_root = module_root_for_path(src)
+    if module_root is not None:
+        # Apply module and sub-module .build files to all sources in the module.
+        current = src.parent
+        while current.is_relative_to(module_root):
+            module_build = current / ".build"
+            if module_build.exists() and module_build != root_build:
+                deps.append(module_build)
+            if current == module_root:
+                break
+            current = current.parent
     obj_mtime = obj.stat().st_mtime
     return any(dep.exists() and dep.stat().st_mtime > obj_mtime for dep in deps)
 
 
-def compile_source(src: Path, extra_flags: Iterable[str] = ()) -> Path:
+def compile_source(src: Path, extra_flags: Iterable[str] = ()) -> tuple[Path, bool]:
     obj = obj_path(src)
     obj.parent.mkdir(parents=True, exist_ok=True)
 
     if not needs_rebuild(src, obj):
-        print(f"{prefix('skip', GREY)} {src.relative_to(SRC_DIR)} (up to date)")
-        return obj
+        return obj, True
 
     cmd = [CC, *CFLAGS, *extra_flags, *INCLUDE_FLAGS, "-c", str(src), "-o", str(obj)]
     print(f"{prefix('cc', GREEN)} {src.relative_to(SRC_DIR)}")
     run_command(cmd)
-    return obj
+    return obj, False
 
 
 def link_executable(objects: list[Path], executable: Path) -> None:
@@ -241,16 +260,30 @@ def parse_sections_and_defines(src: Path) -> tuple[list[str], list[str]]:
 
 
 def module_header_for_dir(directory: Path) -> Path | None:
-    """Return the single header in a module directory (non-recursive)."""
+    """Return the canonical module header: <module>/<module>.h."""
+    if directory == SRC_DIR:
+        return None
+
+    expected = directory / f"{directory.name}.h"
+    if expected.exists():
+        return expected
+
     headers = sorted(directory.glob("*.h"))
     if not headers:
-        return None
-    if len(headers) > 1:
-        names = ", ".join(h.name for h in headers)
         raise SystemExit(
-            colour(f"Multiple headers in module {directory}: {names}", RED)
+            colour(
+                f"Missing module header in {directory}: expected {expected.name}",
+                RED,
+            )
         )
-    return headers[0]
+
+    names = ", ".join(h.name for h in headers)
+    raise SystemExit(
+        colour(
+            f"Invalid module header in {directory}: expected {expected.name}; found {names}",
+            RED,
+        )
+    )
 
 
 def parse_build_file(build_file: Path) -> tuple[list[str], list[str]]:
