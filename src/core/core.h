@@ -590,13 +590,12 @@ DEF_SLICE(u8) string;
 // Macro to insert into a format string that needs to be paired with a STRINGV
 #define STRINGP "%.*s"
 
-#define SLICE_SET(slice_name, slice_type, ...)                                  \
-    static slice_type slice_name##_data[] = {__VA_ARGS__};                      \
-    DEF_SLICE(slice_type) slice_name##_t;                                        \
-    slice_name##_t slice_name = {                                                \
-        slice_name##_data,                                                       \
-        sizeof(slice_name##_data) / sizeof(slice_name##_data[0])                 \
-    }
+#define SLICE_SET(slice_name, slice_type, ...)                                 \
+    static slice_type slice_name##_data[] = {__VA_ARGS__};                     \
+    DEF_SLICE(slice_type) slice_name##_t;                                      \
+    slice_name##_t slice_name = {slice_name##_data,                            \
+                                 sizeof(slice_name##_data) /                   \
+                                     sizeof(slice_name##_data[0])}
 
 //------------------------------------------------------------------------------
 // String construction

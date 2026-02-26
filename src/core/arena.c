@@ -21,22 +21,22 @@ typedef struct {
 
 internal ArenaMemoryInfo get_arena_memory_info(void)
 {
-#if OS_WINDOWS
+#    if OS_WINDOWS
     SYSTEM_INFO sys_info;
     GetSystemInfo(&sys_info);
     return (ArenaMemoryInfo){
         .alloc_granularity   = (usize)sys_info.dwPageSize,
         .reserve_granularity = (usize)sys_info.dwAllocationGranularity,
     };
-#elif OS_POSIX
+#    elif OS_POSIX
     usize page_size = (usize)sysconf(_SC_PAGESIZE);
     return (ArenaMemoryInfo){
         .alloc_granularity   = page_size,
         .reserve_granularity = page_size,
     };
-#else
-#    error "Arena memory info not implemented for this OS."
-#endif
+#    else
+#        error "Arena memory info not implemented for this OS."
+#    endif
 }
 
 void _arena_init(Arena* arena, ArenaDefaultParams params)
@@ -58,7 +58,7 @@ void _arena_init(Arena* arena, ArenaDefaultParams params)
            "Arena reserved size must be at least %zu bytes",
            initial_alloc_size);
 
-#if OS_WINDOWS
+#    if OS_WINDOWS
     // Reserve the full range.
     u8* memory = (u8*)VirtualAlloc(nullptr,
                                    params.reserved_size,
@@ -69,7 +69,7 @@ void _arena_init(Arena* arena, ArenaDefaultParams params)
     mem_check(
         VirtualAlloc(memory, initial_alloc_size, MEM_COMMIT, PAGE_READWRITE));
 
-#elif OS_POSIX
+#    elif OS_POSIX
     // Reserve the full range.
     u8* memory = (u8*)mmap(nullptr,
                            params.reserved_size,
@@ -84,9 +84,9 @@ void _arena_init(Arena* arena, ArenaDefaultParams params)
         perror("mprotect");
         exit(1);
     }
-#else
-#    error "Arena creation not implemented for this OS."
-#endif // OS_WINDOWS
+#    else
+#        error "Arena creation not implemented for this OS."
+#    endif // OS_WINDOWS
 
     arena->memory            = memory;
     arena->cursor            = 0;
@@ -98,13 +98,13 @@ void _arena_init(Arena* arena, ArenaDefaultParams params)
 
 void arena_done(Arena* arena)
 {
-#if OS_WINDOWS
+#    if OS_WINDOWS
     VirtualFree(arena->memory, 0, MEM_RELEASE);
-#elif OS_POSIX
+#    elif OS_POSIX
     munmap(arena->memory, arena->reserved_size);
-#else
-#    error "Arena destruction not implemented for this OS."
-#endif // OS_WINDOWS
+#    else
+#        error "Arena destruction not implemented for this OS."
+#    endif // OS_WINDOWS
 
     memset(arena, 0, sizeof(Arena));
 }
@@ -126,21 +126,21 @@ internal void _arena_ensure_room(Arena* arena, usize size)
             ALIGN_UP(new_cursor - arena->committed_size,
                      arena->alloc_granularity * arena->grow_rate);
 
-#if OS_WINDOWS
+#    if OS_WINDOWS
         mem_check(VirtualAlloc(arena->memory + arena->committed_size,
                                commit_size,
                                MEM_COMMIT,
                                PAGE_READWRITE));
-#elif OS_POSIX
+#    elif OS_POSIX
         if (mprotect(arena->memory + arena->committed_size,
                      commit_size,
                      PROT_READ | PROT_WRITE) != 0) {
             perror("mprotect");
             exit(1);
         }
-#else
-#    error "Arena memory commit not implemented for this OS."
-#endif // OS_WINDOWS
+#    else
+#        error "Arena memory commit not implemented for this OS."
+#    endif // OS_WINDOWS
 
         arena->committed_size += commit_size;
     }
