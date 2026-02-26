@@ -3,6 +3,8 @@
 //
 // Copyright (C)2026 Matt Davies, all rights reserved
 //------------------------------------------------------------------------------
+//> def: _POSIX_C_SOURCE=200809L
+//> def: _GNU_SOURCE
 
 #pragma once
 
@@ -157,6 +159,10 @@
 #    define NOMINMAX
 #    include <windows.h>
 #endif // OS_WINDOWS
+
+#if OS_LINUX
+#    include <unistd.h>
+#endif // OS_LINUX
 
 //------------------------------------------------------------------------------[Macros]
 

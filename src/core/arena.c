@@ -8,6 +8,10 @@
 
 #include <stdio.h>
 
+#if OS_POSIX
+#    include <sys/mman.h>
+#endif
+
 //------------------------------------------------------------------------------
 
 typedef struct {
