@@ -374,7 +374,7 @@ typedef struct {
     usize  count;        // Number of elements currently in array
     usize  alignment;    // Alignment of each element
     usize  element_size; // Size of each element
-    void*  start;        // Start of the array in the arena
+    u64    start;        // Start offset of the array in the arena
 } ArenaSession;
 
 //
@@ -409,8 +409,8 @@ void arena_null_terminate(Arena* arena);
 // Arena marks
 //
 
-void* arena_store(Arena* arena);
-void  arena_restore(Arena* arena, void* mark);
+u64  arena_store(Arena* arena);
+void arena_restore(Arena* arena, u64 mark);
 void  arena_reset(Arena* arena);
 
 //

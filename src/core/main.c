@@ -12,6 +12,7 @@ extern Mutex g_kore_output_mutex;
 
 int run(int argc, char** argv);
 
+#ifndef TEST
 int main(int argc, char** argv)
 {
     mutex_init(&g_kore_output_mutex);
@@ -36,6 +37,7 @@ int main(int argc, char** argv)
     mutex_done(&g_kore_output_mutex);
     return result;
 }
+#endif
 
 void kill(cstr format, ...)
 {

@@ -201,13 +201,12 @@ void arena_null_terminate(Arena* arena)
     *ptr    = '\0';
 }
 
-void* arena_store(Arena* arena) { return arena->memory + arena->cursor; }
+u64 arena_store(Arena* arena) { return (u64)arena->cursor; }
 
-void arena_restore(Arena* arena, void* mark)
+void arena_restore(Arena* arena, u64 mark)
 {
-    usize offset = (usize)((u8*)mark - arena->memory);
-    ASSERT(offset <= arena->cursor, "Invalid arena restore point.");
-    arena->cursor = offset;
+    ASSERT(mark <= arena->cursor, "Invalid arena restore point.");
+    arena->cursor = (usize)mark;
 }
 
 void arena_reset(Arena* arena) { arena->cursor = 0; }
@@ -247,4 +246,7 @@ void* arena_session_alloc(ArenaSession* session, usize count)
 
 usize arena_session_count(ArenaSession* session) { return session->count; }
 
-void* arena_session_address(ArenaSession* session) { return session->start; }
+void* arena_session_address(ArenaSession* session)
+{
+    return session->arena->memory + session->start;
+}

@@ -1,17 +1,20 @@
 default:
     just --list
 
-build *args:
-    uv run build/build.py {{args}}
+python-env:
+    uv --directory build sync
 
-build-release *args:
-    uv run build/build.py -r {{args}}
+build *args: python-env
+    build/.venv/bin/python build/build.py {{args}}
 
-test *args:
-    uv run build/test.py {{args}}
+build-release *args: python-env
+    build/.venv/bin/python build/build.py -r {{args}}
 
-test-release *args:
-    uv run build/test.py -r {{args}}
+test *args: python-env
+    build/.venv/bin/python build/test.py {{args}}
+
+test-release *args: python-env
+    build/.venv/bin/python build/test.py -r {{args}}
 
 run proj *args: (build proj)
     _bin/{{proj}}-debug {{args}}
@@ -21,6 +24,7 @@ run-release proj *args: (build-release proj)
 
 clean:
     rm -rf _bin _obj
+    rm -rf build/.venv
     rm -rf build/__pycache__
 
 alias b := build
