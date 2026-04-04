@@ -68,13 +68,47 @@ def module_root_for_path(path: Path) -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
-def headers_for_source(src: Path) -> list[Path]:
-    """Return all headers belonging to the source's top-level module tree."""
-    module_root = module_root_for_path(src)
-    if module_root is None:
-        # Top-level headers in src/ are intentionally ignored.
+def section_headers(section: str) -> list[Path]:
+    """Return all headers under a declared section/module directory."""
+    directory = SRC_DIR / section
+    if not directory.is_dir():
         return []
-    return sorted(module_root.rglob("*.h"))
+    return sorted(directory.rglob("*.h"))
+
+
+def dependency_sections_for_source(src: Path) -> list[str]:
+    """Return transitive module sections that the source depends on."""
+    sections: list[str] = []
+    if src.suffix == ".c" and src.exists():
+        source_sections, _ = parse_sections_and_defines(src)
+        for section in source_sections:
+            _add_unique(sections, section)
+
+    module_dir = src.parent
+    if module_dir != SRC_DIR and module_dir.is_relative_to(SRC_DIR):
+        module_sections, _ = module_config_for_dir(module_dir)
+        for section in module_sections:
+            _add_unique(sections, section)
+
+    if not sections:
+        return []
+    return expand_sections(sections)
+
+
+def headers_for_source(src: Path) -> list[Path]:
+    """Return headers that should trigger a rebuild of this source."""
+    headers: list[Path] = []
+
+    # Track local module-tree headers (existing behaviour).
+    module_root = module_root_for_path(src)
+    if module_root is not None:
+        headers.extend(sorted(module_root.rglob("*.h")))
+
+    # Track headers from declared module dependencies (new behaviour).
+    for section in dependency_sections_for_source(src):
+        headers.extend(section_headers(section))
+
+    return sorted(set(headers))
 
 
 def obj_path(src: Path) -> Path:
@@ -82,11 +116,11 @@ def obj_path(src: Path) -> Path:
     return (OBJ_DIR / relative).with_suffix(".o")
 
 
-def needs_rebuild(src: Path, obj: Path) -> bool:
+def needs_rebuild(src: Path, obj: Path, header_deps: Iterable[Path] = ()) -> bool:
     if not obj.exists():
         return True
 
-    deps = [src, *headers_for_source(src)]
+    deps = [src, *header_deps]
     root_build = SRC_DIR / ".build"
     if root_build.exists():
         deps.append(root_build)
@@ -105,11 +139,15 @@ def needs_rebuild(src: Path, obj: Path) -> bool:
     return any(dep.exists() and dep.stat().st_mtime > obj_mtime for dep in deps)
 
 
-def compile_source(src: Path, extra_flags: Iterable[str] = ()) -> tuple[Path, bool]:
+def compile_source(
+    src: Path,
+    extra_flags: Iterable[str] = (),
+    header_deps: Iterable[Path] = (),
+) -> tuple[Path, bool]:
     obj = obj_path(src)
     obj.parent.mkdir(parents=True, exist_ok=True)
 
-    if not needs_rebuild(src, obj):
+    if not needs_rebuild(src, obj, header_deps):
         return obj, True
 
     cmd = [CC, *CFLAGS, *extra_flags, *INCLUDE_FLAGS, "-c", str(src), "-o", str(obj)]
@@ -156,6 +194,26 @@ def _add_unique(items: list[str], value: str) -> None:
         items.append(value)
 
 
+def _normalize_section(path: Path) -> str:
+    return path.as_posix()
+
+
+def _resolve_use_token(token: str, source: Path) -> str:
+    """Resolve module token relative to source dir, then fall back to src root."""
+    # 1) Relative to the current module/file directory.
+    relative_candidate = source.parent / token
+    if relative_candidate.is_dir() and relative_candidate.is_relative_to(SRC_DIR):
+        return _normalize_section(relative_candidate.relative_to(SRC_DIR))
+
+    # 2) Absolute from src/ root.
+    root_candidate = SRC_DIR / token
+    if root_candidate.is_dir():
+        return _normalize_section(root_candidate.relative_to(SRC_DIR))
+
+    # Keep original token so downstream validation/error paths remain unchanged.
+    return token
+
+
 def _parse_command_lines(
     lines: Iterable[str],
     source: Path,
@@ -197,7 +255,8 @@ def _parse_command_lines(
                             RED,
                         )
                     )
-                _add_unique(sections, token)
+                resolved = _resolve_use_token(token, source)
+                _add_unique(sections, resolved)
         elif command == "def":
             for token in tokens:
                 if token == "=" or token.startswith("=") or token.endswith("="):
@@ -376,7 +435,8 @@ def banner(profile: str, projects: list[str]) -> None:
 
 def executable_path(project: str, profile: str) -> Path:
     suffix = "-debug" if profile == "debug" else ""
-    return BIN_DIR / f"{project}{suffix}"
+    extension = ".exe" if os.name == "nt" else ""
+    return BIN_DIR / f"{project}{suffix}{extension}"
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -406,6 +466,7 @@ def main(argv: list[str] | None = None) -> None:
 
     module_define_cache: dict[Path, list[str]] = {}
     extra_flags_by_source: dict[Path, list[str]] = {}
+    header_deps_by_source: dict[Path, list[Path]] = {}
     for src in all_sources:
         module_dir = src.parent
         if module_dir not in module_define_cache:
@@ -413,6 +474,7 @@ def main(argv: list[str] | None = None) -> None:
             module_define_cache[module_dir] = defines
         defines = module_define_cache[module_dir]
         extra_flags_by_source[src] = [f"-D{define}" for define in defines]
+        header_deps_by_source[src] = headers_for_source(src)
 
     for project in projects:
         root_src = SRC_DIR / f"{project}.c"
@@ -427,7 +489,11 @@ def main(argv: list[str] | None = None) -> None:
     compiled: dict[Path, Path] = {}
     skipped_sources = 0
     for src in all_sources:
-        obj, skipped = compile_source(src, extra_flags_by_source.get(src, []))
+        obj, skipped = compile_source(
+            src,
+            extra_flags_by_source.get(src, []),
+            header_deps_by_source.get(src, []),
+        )
         compiled[src] = obj
         if skipped:
             skipped_sources += 1
